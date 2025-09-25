@@ -12,10 +12,11 @@ pub fn place_nanoparticles(
     rng: &mut StdRng,
     use_quasi_random: bool,
     type_map: &crate::types::AtomTypeMap,
+    target_density: f64,
 ) -> (Vec<Nanoparticle>, NanoparticleGrid) {
     // Calculate average radius for grid sizing
     let avg_radius = templates.iter().map(|np| np.radius).sum::<f64>() / templates.len() as f64;
-    let mut grid = NanoparticleGrid::new(avg_radius, box_size, type_map);
+    let mut grid = NanoparticleGrid::new(avg_radius, box_size, type_map, target_density);
     let mut placed_particles = Vec::new();
 
     println!("Placing {} nanoparticles in {}x{}x{} Å³ box using {} positioning...",

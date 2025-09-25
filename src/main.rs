@@ -24,9 +24,9 @@ struct Args {
     #[arg(short, long)]
     nanoparticles: Vec<String>,
 
-    /// Simulation box dimensions [Lx, Ly, Lz]
-    #[arg(short = 'b', long, num_args = 3)]
-    box_size: Vec<f64>,
+    /// Simulation box side length (cubic box)
+    #[arg(short = 'b', long)]
+    box_size: f64,
 
     /// Number of nanoparticles to place
     #[arg(short, long, default_value = "10")]
@@ -75,11 +75,7 @@ enum BackgroundMaterial {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    if args.box_size.len() != 3 {
-        return Err("Box size must have exactly 3 dimensions [Lx Ly Lz]".into());
-    }
-
-    let box_size = Vector3::new(args.box_size[0], args.box_size[1], args.box_size[2]);
+    let box_size = Vector3::new(args.box_size, args.box_size, args.box_size);
 
     // Initialize RNG
     let mut rng = match args.seed {
@@ -117,6 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut rng,
         args.quasi_random,
         &type_map,
+        args.density,
     );
 
     // Print voxel occupation summary
@@ -166,6 +163,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let volume = box_size.x * box_size.y * box_size.z;
     let actual_density = background.len() as f64 / volume;
 
+    // Calculate mass-based density in g/cm³
+    let mut total_mass_amu = 0.0;
+
+    // Add nanoparticle masses
+    for np in &placed_nanoparticles {
+        for atom in &np.atoms {
+            if let Some(&mass) = type_map.type_to_mass.get(&atom.atom_type) {
+                total_mass_amu += mass;
+            }
+        }
+    }
+
+    // Add background masses
+    for atom in &background {
+        if let Some(&mass) = type_map.type_to_mass.get(&atom.atom_type) {
+            total_mass_amu += mass;
+        }
+    }
+
+    // Convert to g/cm³: 1 amu = 1.66054e-24 g, 1 Å³ = 1e-24 cm³
+    let volume_cm3 = volume * 1e-24; // Å³ to cm³
+    let mass_g = total_mass_amu * 1.66054e-24; // amu to g
+    let density_g_cm3 = mass_g / volume_cm3;
+
     println!("\n=== Generation Complete ===");
     println!("Nanoparticles placed: {}", placed_nanoparticles.len());
     println!("Nanoparticle atoms: {}", np_atoms);
@@ -173,6 +194,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Total atoms: {}", total_atoms);
     println!("Box volume: {:.1} Å³", volume);
     println!("Actual liquid density: {:.6} atoms/Å³", actual_density);
+    println!("Total mass density: {:.3} g/cm³", density_g_cm3);
     println!("Output file: {}", args.output);
 
     Ok(())

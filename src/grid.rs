@@ -72,9 +72,9 @@ pub struct NanoparticleGrid {
 }
 
 impl NanoparticleGrid {
-    pub fn new(_average_np_radius: f64, box_size: Vector3<f64>, type_map: &crate::types::AtomTypeMap) -> Self {
-        // Use covalent radius-based voxel sizing
-        let voxel_size = type_map.get_minimum_voxel_size();
+    pub fn new(_average_np_radius: f64, box_size: Vector3<f64>, type_map: &crate::types::AtomTypeMap, target_density: f64) -> Self {
+        // Use density-adaptive voxel sizing
+        let voxel_size = type_map.get_adaptive_voxel_size(target_density);
 
         let nx = (box_size.x / voxel_size).ceil() as usize;
         let ny = (box_size.y / voxel_size).ceil() as usize;

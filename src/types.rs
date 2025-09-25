@@ -102,17 +102,32 @@ impl AtomTypeMap {
         }
     }
 
-    pub fn get_minimum_voxel_size(&self) -> f64 {
+    pub fn get_adaptive_voxel_size(&self, target_density: f64) -> f64 {
         // Find the largest covalent radius among all atom types
         let max_cov_radius = self.type_to_covalent_radius.values()
             .fold(0.76_f64, |max, &radius| max.max(radius)); // Default to carbon's radius
 
-        // Use 1.5x the largest covalent radius to prevent unphysical overlaps
+        // Physical minimum: 1.5x largest covalent radius to prevent unphysical overlaps
         let min_separation = max_cov_radius * 1.5;
 
-        println!("Maximum covalent radius: {:.2} Å, minimum voxel size: {:.2} Å",
-                 max_cov_radius, min_separation);
+        // Density-based optimal size: cube root of inverse density gives natural spacing
+        let volume_per_atom = 1.0 / target_density; // Å³ per atom
+        let density_spacing = volume_per_atom.powf(1.0 / 3.0); // Å
 
-        min_separation
+        // Use the larger of physical minimum or density-based spacing
+        let optimal_size = density_spacing.max(min_separation);
+
+        // Clamp to reasonable range
+        let voxel_size = optimal_size.max(2.0).min(20.0);
+
+        println!("Density-adaptive voxel sizing:");
+        println!("  Target density: {:.3} atoms/Å³", target_density);
+        println!("  Volume per atom: {:.1} Å³", volume_per_atom);
+        println!("  Density spacing: {:.2} Å", density_spacing);
+        println!("  Physical minimum: {:.2} Å (1.5 × {:.2} Å cov radius)",
+                 min_separation, max_cov_radius);
+        println!("  Selected voxel size: {:.2} Å", voxel_size);
+
+        voxel_size
     }
 }
