@@ -1,10 +1,32 @@
-use crate::types::{Atom, AtomTypeMap, Nanoparticle};
+use crate::types::{Atom, AtomTypeMap, Nanoparticle, ConvexHull};
 use nalgebra::{Point3, Vector3, Rotation3, Unit};
 use rand::{rngs::StdRng, Rng};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 impl Nanoparticle {
+    pub fn collect_elements_from_xyz(filename: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let file = File::open(filename)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+
+        // Parse header
+        let num_atoms: usize = lines.next().unwrap()?.parse()?;
+        lines.next(); // Skip comment line
+
+        let mut elements = Vec::with_capacity(num_atoms);
+
+        for line in lines {
+            let line = line?;
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 4 {
+                elements.push(parts[0].to_string());
+            }
+        }
+
+        Ok(elements)
+    }
+
     pub fn from_xyz_file(filename: &str, type_map: &mut AtomTypeMap) -> Result<Self, Box<dyn std::error::Error>> {
         let file = File::open(filename)?;
         let reader = BufReader::new(file);
@@ -47,15 +69,14 @@ impl Nanoparticle {
             *pos -= center.coords;
         }
 
-        // Calculate bounding sphere radius
-        let radius = atoms.iter()
-            .map(|atom| atom.position.coords.norm())
-            .fold(0.0, f64::max) + 1.0; // Add safety margin
+        // Compute convex hull from atom positions - this defines the precise boundary
+        let atom_positions: Vec<Point3<f64>> = atoms.iter().map(|a| a.position).collect();
+        let hull = ConvexHull::from_points(&atom_positions);
 
         Ok(Nanoparticle {
             atoms,
             center: Point3::origin(), // Now centered at origin
-            radius,
+            hull,
         })
     }
 

@@ -1,16 +1,16 @@
-# NanoEmbed - Efficient Nanoparticle Composite Generator
+# NanoEmbed - Nanoparticle Composite Generator
 
-A high-performance Rust program for generating LAMMPS input files with randomly distributed nanoparticles in liquid or solid matrices. Designed to scale efficiently to millions of atoms.
+A Rust program for generating LAMMPS input files with nanoparticles embedded in liquid matrices. Uses precise convex hull collision detection and supports both collision-free and overlapping placement modes.
 
 ## Features
 
-- **Voxel-based collision detection**: O(1) collision checking using 3D spatial hashing
-- **Convex hull geometry**: Accurate exclusion volumes for complex nanoparticle shapes
-- **Multiple atom types**: Preserves original atom types from nanoparticle files
-- **Parallel processing**: Multi-threaded liquid generation for better performance
-- **Flexible backgrounds**: Liquid (quasi-random) or FCC lattice filling
-- **Rotation support**: Random orientation of nanoparticles for realistic packing
-- **LAMMPS output**: Standard LAMMPS data file format
+- **Convex hull collision detection**: Precise nanoparticle boundaries using Rapier3D physics engine
+- **Flexible placement modes**: Collision (no overlaps) or overlap (first placed wins)
+- **TOML configuration**: Simple configuration files instead of complex command-line arguments
+- **Multiple nanoparticle types**: Support for different particle types with individual counts
+- **Quasi-random positioning**: Even distribution using Halton sequences
+- **Atomic radius expansion**: Proper separation based on covalent radii
+- **Mass-based atom types**: Consistent atom type assignment ordered by atomic mass
 
 ## Quick Start
 
@@ -18,88 +18,78 @@ A high-performance Rust program for generating LAMMPS input files with randomly 
 # Build the project
 cargo build --release
 
-# Basic usage - place 5 nanoparticles in a 200x200x200 Å box
-./target/release/nanoembed \
-    -n np/np_1.xyz \
-    -b 200 200 200 \
-    -c 5 \
-    -o system.data
-
-# Advanced usage with custom density and voxel size
-./target/release/nanoembed \
-    -n np/np_1.xyz np/np_2.xyz \
-    -b 300 300 400 \
-    -c 20 \
-    -d 0.05 \
-    -v 0.5 \
-    -s 3.0 \
-    -m liquid \
-    -r 12345
+# Run with a configuration file
+./target/release/nanoembed config.toml
 ```
 
-## Architecture
+## Configuration File Format
 
-### Voxel-Based Spatial Partitioning
-- Simulation box divided into uniform voxels (default 1.0 Å)
-- Each voxel marked as occupied/empty based on convex hull tests
-- Enables O(1) collision detection for efficient placement
+Create a TOML configuration file (e.g., `config.toml`):
 
-### Convex Hull Collision Detection
-- Nanoparticles represented by convex hulls computed from atom positions
-- Point-in-hull tests using hyperplane inequalities
-- Accurate exclusion volumes for complex geometries
+```toml
+[system]
+box_size = 250.0          # Cubic box size in Angstroms
+output_file = "system.data"
+random_seed = 12345       # Optional: for reproducible results
 
-### Efficient Background Generation
-- Parallel voxel processing for liquid generation
-- Poisson sampling within empty voxels at specified density
-- Scales to millions of background atoms
+[background]
+material = "liquid"       # liquid, fcc, or none
+element = "Co"           # Background element
+density = 0.04           # Atoms per Å³
+separation = 2.0         # Minimum separation between nanoparticles (Å)
 
-## Parameters
+[[nanoparticles]]
+file = "np/np_1.xyz"
+count = 5
 
-- `--nanoparticles`: XYZ files containing nanoparticle geometries
-- `--box-size`: Orthorhombic simulation box dimensions [Lx Ly Lz] in Angstroms
-- `--count`: Number of nanoparticles to randomly place
-- `--density`: Liquid density in atoms/Å³ (typical: 0.05-0.1)
-- `--voxel-size`: Spatial resolution for collision detection (smaller = more accurate)
-- `--separation`: Minimum distance between nanoparticle surfaces
-- `--material`: Background type (liquid, fcc, or none)
+[[nanoparticles]]
+file = "np/np_2.xyz"
+count = 10
+
+[analysis]
+validate = true          # Run nearest-neighbor analysis
+quasi_random = true      # Use quasi-random positioning for even distribution
+
+[placement]
+mode = "collision"       # "collision" (no overlaps) or "overlap" (first wins)
+```
+
+## Placement Modes
+
+### Collision Mode (Default)
+- **No overlaps allowed**: Nanoparticles cannot overlap
+- **Strict separation**: Maintains minimum distance between surfaces
+- **Higher packing challenge**: May fail to place all particles in dense systems
+
+### Overlap Mode
+- **Overlaps allowed**: Nanoparticles can overlap
+- **First placed wins**: Atoms from earlier-placed nanoparticles take precedence
+- **Higher packing density**: Can achieve denser packings
+- **Atom-level resolution**: Only overlapping atoms are removed, not entire particles
 
 ## Input Format
 
 Nanoparticle files should be in standard XYZ format:
 ```
-62607
-
+8240
+Generated nanoparticle
 C    20.205    27.316    26.547
 W    21.664    26.474    25.127
 ...
 ```
 
-## Performance
+## Key Technical Features
 
-- Tested with systems containing millions of atoms
-- Parallel processing scales with CPU cores
-- Memory usage scales linearly with system size
-- Voxel-based approach much faster than naive O(n²) collision detection
+- **Convex hull collision detection**: Uses Rapier3D physics engine for precise geometric calculations
+- **Rounded convex hulls**: Expands boundaries by atomic radii to prevent unphysical overlaps
+- **Density-adaptive voxel sizing**: Automatically adjusts spatial resolution based on target density
+- **Mass-ordered atom types**: Assigns atom types consistently ordered by atomic mass
+- **Timing analysis**: Detailed performance breakdown for optimization
 
 ## Output
 
-LAMMPS data file with:
-- Proper atom IDs and molecule groupings
-- Multiple atom types (nanoparticle + background)
-- Periodic boundary conditions
-- Ready for MD simulation
-
-## Example Systems
-
-Generate a 500³ Å system with tungsten carbide nanoparticles in cobalt matrix:
-```bash
-./target/release/nanoembed \
-    -n nanoparticles/wc_np1.xyz nanoparticles/wc_np2.xyz \
-    -b 500 500 500 \
-    -c 50 \
-    -d 0.08 \
-    -s 2.0 \
-    -m liquid \
-    -o wc_co_composite.data
-```
+The program generates:
+1. **LAMMPS data file**: Standard format ready for molecular dynamics simulation
+2. **Timing breakdown**: Performance analysis of each generation stage
+3. **Validation analysis**: Nearest-neighbor distance statistics (optional)
+4. **Placement statistics**: Success rates and packing information

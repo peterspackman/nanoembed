@@ -8,7 +8,9 @@ pub fn generate_liquid_background(
     box_size: Vector3<f64>,
     density: f64,
     grid: &NanoparticleGrid,
-    rng: &mut StdRng,
+    _rng: &mut StdRng,
+    background_element: &str,
+    background_type: u32,
 ) -> Vec<Atom> {
     println!("Generating liquid background with density {} atoms/Å³...", density);
 
@@ -95,9 +97,9 @@ pub fn generate_liquid_background(
                            candidate_pos.z >= 0.0 && candidate_pos.z < box_size.z {
 
                             local_atoms.push(Atom {
-                                element: "Co".to_string(),
+                                element: background_element.to_string(),
                                 position: candidate_pos,
-                                atom_type: 999,
+                                atom_type: background_type,
                             });
                         }
                     }

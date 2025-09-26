@@ -22,6 +22,25 @@ pub fn write_lammps_data(
 
     // LAMMPS header
     writeln!(writer, "LAMMPS data file - nanoparticle composite system")?;
+    writeln!(writer, "#")?;
+    writeln!(writer, "# Atom type definitions:")?;
+
+    // Create atom type summary
+    let mut type_summary: Vec<(u32, String, f64)> = Vec::new();
+    for atom_type in 1..type_map.next_type {
+        if let (Some(element), Some(mass)) = (
+            type_map.type_to_element.get(&atom_type),
+            type_map.type_to_mass.get(&atom_type)
+        ) {
+            type_summary.push((atom_type, element.clone(), *mass));
+        }
+    }
+    type_summary.sort_by_key(|x| x.0);
+
+    for (atom_type, element, mass) in &type_summary {
+        writeln!(writer, "# Type {}: {} (mass {:.3} amu)", atom_type, element, mass)?;
+    }
+    writeln!(writer, "#")?;
     writeln!(writer)?;
     writeln!(writer, "{} atoms", total_atoms)?;
     writeln!(writer, "{} atom types", num_types)?;

@@ -1,4 +1,5 @@
 mod types;
+mod config;
 mod grid;
 mod nanoparticle;
 mod placement;
@@ -7,12 +8,13 @@ mod background;
 mod validation;
 mod output;
 
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use nalgebra::Vector3;
 use rand::{rngs::StdRng, SeedableRng};
 
+use config::Config;
 use types::{AtomTypeMap, Nanoparticle};
-use placement::place_nanoparticles;
+use placement::place_nanoparticles_with_counts;
 use background::generate_liquid_background;
 use validation::analyze_nearest_neighbors;
 use output::write_lammps_data;
@@ -20,65 +22,24 @@ use output::write_lammps_data;
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Input nanoparticle XYZ files (can specify multiple)
-    #[arg(short, long)]
-    nanoparticles: Vec<String>,
-
-    /// Simulation box side length (cubic box)
-    #[arg(short = 'b', long)]
-    box_size: f64,
-
-    /// Number of nanoparticles to place
-    #[arg(short, long, default_value = "10")]
-    count: usize,
-
-    /// Background material
-    #[arg(short = 'm', long, default_value = "liquid")]
-    material: BackgroundMaterial,
-
-    /// Output LAMMPS data file
-    #[arg(short, long, default_value = "system.data")]
-    output: String,
-
-    /// Voxel size for space partitioning (Angstroms)
-    #[arg(short, long, default_value = "1.0")]
-    voxel_size: f64,
-
-    /// Minimum separation distance between nanoparticles
-    #[arg(short, long, default_value = "2.0")]
-    separation: f64,
-
-    /// Liquid density (atoms per cubic Angstrom)
-    #[arg(short, long, default_value = "0.08")]
-    density: f64,
-
-    /// Random seed
-    #[arg(short = 'r', long)]
-    seed: Option<u64>,
-
-    /// Validate system by analyzing nearest neighbor distances
-    #[arg(long)]
-    validate: bool,
-
-    /// Use quasi-random (Korobov) positioning instead of pure random
-    #[arg(long)]
-    quasi_random: bool,
-}
-
-#[derive(Clone, ValueEnum)]
-enum BackgroundMaterial {
-    Liquid,
-    Fcc,
-    None,
+    /// Configuration file (TOML format)
+    config: String,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let start_time = std::time::Instant::now();
     let args = Args::parse();
 
-    let box_size = Vector3::new(args.box_size, args.box_size, args.box_size);
+    // Load configuration
+    let config_start = std::time::Instant::now();
+    let config = Config::from_file(&args.config)?;
+    let config_time = config_start.elapsed();
+    println!("Loaded configuration from: {} ({:.2}s)", args.config, config_time.as_secs_f64());
+
+    let box_size = Vector3::new(config.system.box_size, config.system.box_size, config.system.box_size);
 
     // Initialize RNG
-    let mut rng = match args.seed {
+    let mut rng = match config.system.random_seed {
         Some(seed) => {
             println!("Using random seed: {}", seed);
             StdRng::seed_from_u64(seed)
@@ -89,73 +50,106 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize atom type mapping
     let mut type_map = AtomTypeMap::new();
 
-    // Load nanoparticle templates
+    // First pass: collect all elements from nanoparticles and background
+    let analysis_start = std::time::Instant::now();
+    println!("Analyzing elements for consistent atom type assignment...");
+    if config.nanoparticles.is_empty() {
+        return Err("At least one nanoparticle must be specified in config".into());
+    }
+
+    let mut all_elements = Vec::new();
+    for np_config in &config.nanoparticles {
+        let elements = Nanoparticle::collect_elements_from_xyz(&np_config.file)?;
+        all_elements.extend(elements);
+    }
+
+    // Add background element
+    all_elements.push(config.background.element.clone());
+
+    // Pre-populate atom types in mass order
+    type_map.pre_populate_types(&all_elements);
+    let analysis_time = analysis_start.elapsed();
+
+    // Second pass: Load nanoparticle templates with pre-determined types
+    let loading_start = std::time::Instant::now();
     println!("Loading nanoparticle templates...");
-    if args.nanoparticles.is_empty() {
-        return Err("At least one nanoparticle file must be specified".into());
-    }
-
     let mut templates = Vec::new();
-    for filename in &args.nanoparticles {
-        println!("Loading: {}", filename);
-        let np = Nanoparticle::from_xyz_file(filename, &mut type_map)?;
-        println!("  {} atoms, radius: {:.2} Å",
-                np.atoms.len(), np.radius);
-        templates.push(np);
+    for np_config in &config.nanoparticles {
+        println!("Loading: {} (count: {})", np_config.file, np_config.count);
+        let np = Nanoparticle::from_xyz_file(&np_config.file, &mut type_map)?;
+        println!("  {} atoms, radius: {:.2} Å", np.atoms.len(), np.radius());
+        templates.push((np, np_config.count));
     }
+    let loading_time = loading_start.elapsed();
 
-    // Place nanoparticles
-    let (placed_nanoparticles, occupied_grid) = place_nanoparticles(
+    // Place nanoparticles with individual counts
+    let placement_start = std::time::Instant::now();
+    let (placed_nanoparticles, occupied_grid) = place_nanoparticles_with_counts(
         &templates,
         box_size,
-        args.count,
-        args.separation,
+        config.background.separation,
         &mut rng,
-        args.quasi_random,
+        config.analysis.quasi_random,
         &type_map,
-        args.density,
+        config.background.density,
+        &config.placement.mode,
     );
+    let placement_time = placement_start.elapsed();
 
     // Print voxel occupation summary
     occupied_grid.print_occupation_summary();
 
-    // Generate background
-    let mut background = match args.material {
-        BackgroundMaterial::Liquid => {
-            if args.density > 0.0 {
-                generate_liquid_background(box_size, args.density, &occupied_grid, &mut rng)
+    // Generate background with proper element and type assignment
+    let background_start = std::time::Instant::now();
+    let background = match config.background.material {
+        config::BackgroundMaterial::Liquid => {
+            if config.background.density > 0.0 {
+                let bg_type = type_map.get_or_create_type(&config.background.element);
+                generate_liquid_background(
+                    box_size,
+                    config.background.density,
+                    &occupied_grid,
+                    &mut rng,
+                    &config.background.element,
+                    bg_type
+                )
             } else {
                 Vec::new()
             }
         }
-        BackgroundMaterial::Fcc => {
+        config::BackgroundMaterial::Fcc => {
             println!("FCC lattice generation not yet implemented, using liquid");
-            if args.density > 0.0 {
-                generate_liquid_background(box_size, args.density, &occupied_grid, &mut rng)
+            if config.background.density > 0.0 {
+                let bg_type = type_map.get_or_create_type(&config.background.element);
+                generate_liquid_background(
+                    box_size,
+                    config.background.density,
+                    &occupied_grid,
+                    &mut rng,
+                    &config.background.element,
+                    bg_type
+                )
             } else {
                 Vec::new()
             }
         }
-        BackgroundMaterial::None => Vec::new(),
+        config::BackgroundMaterial::None => Vec::new(),
     };
-
-    // Assign proper atom types to background atoms
-    if !background.is_empty() {
-        let bg_type = type_map.get_or_create_type("Co");
-        for atom in &mut background {
-            atom.atom_type = bg_type;
-        }
-    }
+    let background_time = background_start.elapsed();
 
     // Write output
-    write_lammps_data(&args.output, &placed_nanoparticles, &background, box_size, &type_map)?;
+    let output_start = std::time::Instant::now();
+    write_lammps_data(&config.system.output_file, &placed_nanoparticles, &background, box_size, &type_map)?;
+    let output_time = output_start.elapsed();
 
     // Analyze nearest neighbor distances if requested
-    if args.validate {
+    let validation_start = std::time::Instant::now();
+    if config.analysis.validate {
         if let Err(e) = analyze_nearest_neighbors(&placed_nanoparticles, &background) {
             println!("Warning: Could not analyze nearest neighbors: {}", e);
         }
     }
+    let validation_time = validation_start.elapsed();
 
     // Summary
     let np_atoms: usize = placed_nanoparticles.iter().map(|np| np.atoms.len()).sum();
@@ -186,6 +180,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let volume_cm3 = volume * 1e-24; // Å³ to cm³
     let mass_g = total_mass_amu * 1.66054e-24; // amu to g
     let density_g_cm3 = mass_g / volume_cm3;
+    let total_time = start_time.elapsed();
 
     println!("\n=== Generation Complete ===");
     println!("Nanoparticles placed: {}", placed_nanoparticles.len());
@@ -195,7 +190,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Box volume: {:.1} Å³", volume);
     println!("Actual liquid density: {:.6} atoms/Å³", actual_density);
     println!("Total mass density: {:.3} g/cm³", density_g_cm3);
-    println!("Output file: {}", args.output);
+    println!("Output file: {}", config.system.output_file);
+
+    println!("\n=== Timing Breakdown ===");
+    println!("Configuration loading: {:.2}s ({:.1}%)",
+             config_time.as_secs_f64(),
+             (config_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0);
+    println!("Element analysis: {:.2}s ({:.1}%)",
+             analysis_time.as_secs_f64(),
+             (analysis_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0);
+    println!("Template loading: {:.2}s ({:.1}%)",
+             loading_time.as_secs_f64(),
+             (loading_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0);
+    println!("Nanoparticle placement: {:.2}s ({:.1}%)",
+             placement_time.as_secs_f64(),
+             (placement_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0);
+    println!("Background generation: {:.2}s ({:.1}%)",
+             background_time.as_secs_f64(),
+             (background_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0);
+    println!("File output: {:.2}s ({:.1}%)",
+             output_time.as_secs_f64(),
+             (output_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0);
+    if config.analysis.validate {
+        println!("Validation analysis: {:.2}s ({:.1}%)",
+                 validation_time.as_secs_f64(),
+                 (validation_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0);
+    }
+    println!("Total time: {:.2}s", total_time.as_secs_f64());
 
     Ok(())
 }

@@ -1,4 +1,8 @@
 use nalgebra::{Point3, Vector3};
+use rapier3d::geometry::{ColliderBuilder, ColliderSet, SharedShape};
+use rapier3d::math::Isometry;
+use rapier3d::pipeline::{QueryPipeline, QueryFilter};
+use rapier3d::dynamics::{RigidBodyBuilder, RigidBodySet};
 
 #[derive(Debug, Clone)]
 pub struct VoxelGrid {
@@ -61,14 +65,14 @@ impl VoxelGrid {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct NanoparticleGrid {
     pub voxel_size: f64,
     pub box_size: Vector3<f64>,
     pub grid_dims: (usize, usize, usize),
     pub occupied: Vec<bool>,
-    pub nanoparticle_centers: Vec<Point3<f64>>,
-    pub nanoparticle_radii: Vec<f64>,
+    pub rigid_body_set: RigidBodySet,
+    pub collider_set: ColliderSet,
+    pub query_pipeline: QueryPipeline,
 }
 
 impl NanoparticleGrid {
@@ -88,8 +92,9 @@ impl NanoparticleGrid {
             box_size,
             grid_dims: (nx, ny, nz),
             occupied: vec![false; nx * ny * nz],
-            nanoparticle_centers: Vec::new(),
-            nanoparticle_radii: Vec::new(),
+            rigid_body_set: RigidBodySet::new(),
+            collider_set: ColliderSet::new(),
+            query_pipeline: QueryPipeline::new(),
         }
     }
 
@@ -115,26 +120,73 @@ impl NanoparticleGrid {
         ))
     }
 
-    pub fn check_collision(&self, center: &Point3<f64>, radius: f64, separation: f64) -> bool {
-        let search_radius = radius + separation;
+    pub fn check_collision(&self, nanoparticle: &crate::types::Nanoparticle, center: &Point3<f64>, separation: f64, type_map: &crate::types::AtomTypeMap) -> bool {
+        // Create the candidate shape at the proposed position
+        let candidate_pos = Isometry::translation(center.x as f32, center.y as f32, center.z as f32);
 
-        // Quick sphere-sphere check against all placed nanoparticles
-        for (i, &np_center) in self.nanoparticle_centers.iter().enumerate() {
-            let distance = (center - np_center).norm();
-            let min_distance = search_radius + self.nanoparticle_radii[i];
+        // Use 3 Å expansion - this was tested and works to prevent close contacts
+        let max_cov_radius = 3.0;
 
-            if distance < min_distance {
-                return true; // Collision detected
+        // Since both shapes are expanded by max_cov_radius, we need additional separation
+        // The distance query returns distance between expanded surfaces, so we need the requested separation
+        let total_buffer = separation;
+
+        // Create an expanded convex hull using Minkowski sum with a sphere
+        let test_shape = if let Some(polyhedron) = nanoparticle.hull.shape.as_convex_polyhedron() {
+            rapier3d::geometry::SharedShape::round_convex_hull(
+                polyhedron.points(),
+                max_cov_radius as f32
+            ).unwrap_or_else(|| {
+                let radius = nanoparticle.radius() as f32 + max_cov_radius as f32;
+                rapier3d::geometry::SharedShape::ball(radius)
+            })
+        } else {
+            let radius = nanoparticle.radius() as f32 + max_cov_radius as f32;
+            rapier3d::geometry::SharedShape::ball(radius)
+        };
+
+        // Check if any existing nanoparticle is too close
+        for (_, collider) in self.collider_set.iter() {
+            // Calculate distance between the candidate shape and this existing collider
+            let distance_result = rapier3d::parry::query::distance(
+                &candidate_pos,
+                test_shape.as_ref(),
+                collider.position(),
+                collider.shape()
+            );
+
+            if let Ok(distance) = distance_result {
+                if distance < total_buffer as f32 {
+                    return true; // Too close!
+                }
             }
         }
 
         false
     }
 
-    pub fn add_nanoparticle(&mut self, center: Point3<f64>, radius: f64) {
-        // Store nanoparticle info for distance checks
-        self.nanoparticle_centers.push(center);
-        self.nanoparticle_radii.push(radius);
+    pub fn add_nanoparticle(&mut self, nanoparticle: &crate::types::Nanoparticle, center: Point3<f64>, type_map: &crate::types::AtomTypeMap) {
+        // Create a rigid body for the nanoparticle (static/fixed)
+        let rigid_body = RigidBodyBuilder::fixed()
+            .translation(nalgebra::Vector3::new(center.x as f32, center.y as f32, center.z as f32))
+            .build();
+        let rb_handle = self.rigid_body_set.insert(rigid_body);
+
+        // Create an expanded collider that accounts for atomic radii - use same expansion as in check_collision
+        let max_cov_radius = 3.0;
+        let expanded_shape = rapier3d::geometry::SharedShape::round_convex_hull(
+            nanoparticle.hull.shape.as_convex_polyhedron().unwrap().points(),
+            max_cov_radius as f32
+        ).unwrap_or_else(|| {
+            // Fallback to expanded sphere if round_convex_hull fails
+            let radius = nanoparticle.radius() as f32 + max_cov_radius as f32;
+            rapier3d::geometry::SharedShape::ball(radius)
+        });
+        let collider = ColliderBuilder::new(expanded_shape).build();
+        self.collider_set.insert_with_parent(collider, rb_handle, &mut self.rigid_body_set);
+
+        // Update the query pipeline to include the new collider
+        self.query_pipeline.update(&self.rigid_body_set, &self.collider_set);
     }
 
     pub fn mark_atoms_occupied(&mut self, atoms: &[crate::types::Atom]) {
@@ -150,6 +202,48 @@ impl NanoparticleGrid {
             }
         }
         println!("  Marked {} voxels as occupied for {} atoms", marked_voxels.len(), atoms.len());
+    }
+
+    pub fn mark_atoms_occupied_with_overlap(&mut self, atoms: &[crate::types::Atom], placement_mode: &crate::config::PlacementMode, placed_atoms: &mut Vec<crate::types::Atom>) -> Vec<crate::types::Atom> {
+        match placement_mode {
+            crate::config::PlacementMode::Collision => {
+                // Same as before - mark all atoms and add to placed_atoms list
+                self.mark_atoms_occupied(atoms);
+                placed_atoms.extend_from_slice(atoms);
+                atoms.to_vec()
+            },
+            crate::config::PlacementMode::Overlap => {
+                // Check each new atom against all previously placed atoms
+                let mut kept_atoms = Vec::new();
+                let min_distance = 2.0; // Minimum distance between atom centers (2x covalent radius)
+
+                for new_atom in atoms {
+                    let mut overlaps = false;
+
+                    // Check against all previously placed atoms
+                    for existing_atom in placed_atoms.iter() {
+                        let distance = (new_atom.position - existing_atom.position).norm();
+                        if distance < min_distance {
+                            overlaps = true;
+                            break; // First placed wins - skip this atom
+                        }
+                    }
+
+                    if !overlaps {
+                        kept_atoms.push(new_atom.clone());
+                        placed_atoms.push(new_atom.clone()); // Add to global placed atoms list
+                    }
+                }
+
+                // Still mark voxels for background generation
+                self.mark_atoms_occupied(&kept_atoms);
+
+                println!("  Kept {} atoms out of {} (overlap mode: {:.1}% rejected)",
+                         kept_atoms.len(), atoms.len(),
+                         100.0 * (atoms.len() - kept_atoms.len()) as f64 / atoms.len() as f64);
+                kept_atoms
+            }
+        }
     }
 
     pub fn is_voxel_occupied(&self, i: usize, j: usize, k: usize) -> bool {

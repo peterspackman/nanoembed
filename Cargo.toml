@@ -9,8 +9,10 @@ rand = "0.8"
 rayon = "1.8"
 clap = { version = "4.0", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
 ordered-float = "4.0"
 kiddo = "4.0"
+rapier3d = "0.18"  # Complete 3D physics engine with collision detection and convex hulls
 
 [profile.release]
 opt-level = 3
