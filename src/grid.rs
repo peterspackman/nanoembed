@@ -120,12 +120,12 @@ impl NanoparticleGrid {
         ))
     }
 
-    pub fn check_collision(&self, nanoparticle: &crate::types::Nanoparticle, center: &Point3<f64>, separation: f64, type_map: &crate::types::AtomTypeMap) -> bool {
+    pub fn check_collision(&self, nanoparticle: &crate::types::Nanoparticle, center: &Point3<f64>, separation: f64, type_map: &crate::types::AtomTypeMap, collision_buffer: f64) -> bool {
         // Create the candidate shape at the proposed position
         let candidate_pos = Isometry::translation(center.x as f32, center.y as f32, center.z as f32);
 
-        // Use 3 Å expansion - this was tested and works to prevent close contacts
-        let max_cov_radius = 3.0;
+        // Use configurable collision buffer
+        let max_cov_radius = collision_buffer;
 
         // Since both shapes are expanded by max_cov_radius, we need additional separation
         // The distance query returns distance between expanded surfaces, so we need the requested separation
@@ -165,7 +165,7 @@ impl NanoparticleGrid {
         false
     }
 
-    pub fn add_nanoparticle(&mut self, nanoparticle: &crate::types::Nanoparticle, center: Point3<f64>, type_map: &crate::types::AtomTypeMap) {
+    pub fn add_nanoparticle(&mut self, nanoparticle: &crate::types::Nanoparticle, center: Point3<f64>, type_map: &crate::types::AtomTypeMap, collision_buffer: f64) {
         // Create a rigid body for the nanoparticle (static/fixed)
         let rigid_body = RigidBodyBuilder::fixed()
             .translation(nalgebra::Vector3::new(center.x as f32, center.y as f32, center.z as f32))
@@ -173,7 +173,7 @@ impl NanoparticleGrid {
         let rb_handle = self.rigid_body_set.insert(rigid_body);
 
         // Create an expanded collider that accounts for atomic radii - use same expansion as in check_collision
-        let max_cov_radius = 3.0;
+        let max_cov_radius = collision_buffer;
         let expanded_shape = rapier3d::geometry::SharedShape::round_convex_hull(
             nanoparticle.hull.shape.as_convex_polyhedron().unwrap().points(),
             max_cov_radius as f32
@@ -204,7 +204,7 @@ impl NanoparticleGrid {
         println!("  Marked {} voxels as occupied for {} atoms", marked_voxels.len(), atoms.len());
     }
 
-    pub fn mark_atoms_occupied_with_overlap(&mut self, atoms: &[crate::types::Atom], placement_mode: &crate::config::PlacementMode, placed_atoms: &mut Vec<crate::types::Atom>) -> Vec<crate::types::Atom> {
+    pub fn mark_atoms_occupied_with_overlap(&mut self, atoms: &[crate::types::Atom], placement_mode: &crate::config::PlacementMode, placed_atoms: &mut Vec<crate::types::Atom>, min_atom_distance: f64) -> Vec<crate::types::Atom> {
         match placement_mode {
             crate::config::PlacementMode::Collision => {
                 // Same as before - mark all atoms and add to placed_atoms list
@@ -215,7 +215,7 @@ impl NanoparticleGrid {
             crate::config::PlacementMode::Overlap => {
                 // Check each new atom against all previously placed atoms
                 let mut kept_atoms = Vec::new();
-                let min_distance = 2.0; // Minimum distance between atom centers (2x covalent radius)
+                let min_distance = min_atom_distance; // Minimum distance between atom centers
 
                 for new_atom in atoms {
                     let mut overlaps = false;

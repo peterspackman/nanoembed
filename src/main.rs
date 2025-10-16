@@ -92,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.analysis.quasi_random,
         &type_map,
         config.background.density,
-        &config.placement.mode,
+        &config.placement,
     );
     let placement_time = placement_start.elapsed();
 

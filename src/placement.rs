@@ -12,7 +12,7 @@ pub fn place_nanoparticles_with_counts(
     use_quasi_random: bool,
     type_map: &crate::types::AtomTypeMap,
     target_density: f64,
-    placement_mode: &crate::config::PlacementMode,
+    placement_config: &crate::config::PlacementConfig,
 ) -> (Vec<Nanoparticle>, NanoparticleGrid) {
     // Calculate total count and average radius
     let total_count: usize = templates.iter().map(|(_, count)| count).sum();
@@ -45,7 +45,7 @@ pub fn place_nanoparticles_with_counts(
         use_quasi_random,
         type_map,
         target_density,
-        placement_mode,
+        placement_config,
     );
 
     (placed, grid)
@@ -60,7 +60,7 @@ pub fn place_nanoparticles(
     use_quasi_random: bool,
     type_map: &crate::types::AtomTypeMap,
     target_density: f64,
-    placement_mode: &crate::config::PlacementMode,
+    placement_config: &crate::config::PlacementConfig,
 ) -> (Vec<Nanoparticle>, NanoparticleGrid) {
     // Calculate average radius for grid sizing
     let avg_radius = templates.iter().map(|np| np.radius()).sum::<f64>() / templates.len() as f64;
@@ -130,10 +130,10 @@ pub fn place_nanoparticles(
             };
 
             // Check for collisions with previously placed nanoparticles
-            let should_place = match placement_mode {
+            let should_place = match placement_config.mode {
                 crate::config::PlacementMode::Collision => {
                     // Strict collision avoidance - no overlaps allowed
-                    !grid.check_collision(template, &test_center, separation, type_map)
+                    !grid.check_collision(template, &test_center, separation, type_map, placement_config.collision_buffer)
                 },
                 crate::config::PlacementMode::Overlap => {
                     // Allow overlaps - first placed wins, so always place if position is valid
@@ -148,10 +148,10 @@ pub fn place_nanoparticles(
                 let offset = test_center - new_particle.center;
                 new_particle.translate(&offset);
 
-                grid.add_nanoparticle(&new_particle, test_center, type_map);
+                grid.add_nanoparticle(&new_particle, test_center, type_map, placement_config.collision_buffer);
 
                 // Handle atom overlap based on placement mode
-                let final_atoms = grid.mark_atoms_occupied_with_overlap(&new_particle.atoms, placement_mode, &mut all_placed_atoms);
+                let final_atoms = grid.mark_atoms_occupied_with_overlap(&new_particle.atoms, &placement_config.mode, &mut all_placed_atoms, placement_config.min_atom_distance);
 
                 // Update the nanoparticle with the final set of atoms (important for overlap mode)
                 let mut final_particle = new_particle.clone();

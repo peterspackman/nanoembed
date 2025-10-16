@@ -53,6 +53,12 @@ pub struct AnalysisConfig {
 pub struct PlacementConfig {
     #[serde(default = "default_placement_mode")]
     pub mode: PlacementMode,
+    /// Minimum distance between atom centers in overlap mode (Å)
+    #[serde(default = "default_min_atom_distance")]
+    pub min_atom_distance: f64,
+    /// Buffer distance added to collision detection shapes (Å)
+    #[serde(default = "default_collision_buffer")]
+    pub collision_buffer: f64,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -116,4 +122,12 @@ fn default_separation() -> f64 {
 
 fn default_placement_mode() -> PlacementMode {
     PlacementMode::Collision
+}
+
+fn default_min_atom_distance() -> f64 {
+    2.0  // Minimum distance between atom centers in overlap mode
+}
+
+fn default_collision_buffer() -> f64 {
+    3.0  // Buffer distance added to collision detection shapes
 }
