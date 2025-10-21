@@ -12,7 +12,10 @@ serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 ordered-float = "4.0"
 kiddo = "4.0"
-rapier3d = "0.18"  # Complete 3D physics engine with collision detection and convex hulls
+rapier3d = "0.18"  # Temporary: used only for convex hull computation, will be optional
+
+[dev-dependencies]
+approx = "0.5"
 
 [profile.release]
 opt-level = 3

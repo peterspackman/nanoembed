@@ -1,0 +1,57 @@
+# Example configuration for nanoembed with dynamics-based relaxation
+
+[system]
+box_size = 250.0          # Cubic box size in Angstroms
+output_file = "system.data"
+random_seed = 12345       # Optional: for reproducible results
+
+[background]
+material = "liquid"       # liquid, fcc, or none
+element = "Co"           # Background element (binder)
+density = 0.04           # Atoms per Å³
+separation = 2.0         # Minimum separation between nanoparticles (Å)
+
+# Nanoparticle configurations
+[[nanoparticles]]
+file = "np/np_1.xyz"
+count = 5
+
+[[nanoparticles]]
+file = "np/np_2.xyz"
+count = 10
+
+[analysis]
+validate = true          # Run nearest-neighbor analysis
+quasi_random = true      # Use quasi-random positioning for even distribution
+
+[placement]
+mode = "collision"       # "collision" (no overlaps) or "overlap" (first wins)
+min_atom_distance = 2.0  # Minimum distance between atom centers in overlap mode (Å)
+collision_buffer = 3.0   # Buffer distance for collision detection (Å)
+
+# ============================================================================
+# NEW: Dynamics Configuration
+# ============================================================================
+[dynamics]
+enabled = true                # Enable energy minimization and PBC
+max_iterations = 10000        # Maximum minimization iterations
+force_tolerance = 0.01        # Convergence when max force < this (kcal/mol/Å)
+energy_tolerance = 1e-6       # Convergence when |ΔE| < this (kcal/mol)
+max_displacement = 0.5        # Maximum position change per step (Å)
+max_rotation = 0.1            # Maximum rotation per step (radians)
+use_fire = true               # Use FIRE algorithm (faster than steepest descent)
+
+# Potential configuration - choose one:
+# Option 1: Soft sphere (WCA) potential
+[dynamics.potential.softsphere]
+epsilon = 1.0                 # Energy scale (kcal/mol)
+sigma = 3.0                   # Length scale - equilibrium distance (Å)
+
+# Option 2: Hard sphere potential (comment out softsphere, uncomment this)
+# [dynamics.potential.hardsphere]
+# penalty_strength = 100.0    # Spring constant for overlap penalty (kcal/mol/Å²)
+
+# Surface sphere discretization
+[dynamics.surface]
+sphere_radius = 2.0           # Radius of surface collision spheres (Å)
+target_spacing = 3.0          # Target spacing between surface spheres (Å)

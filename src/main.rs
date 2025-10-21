@@ -8,6 +8,14 @@ mod background;
 mod validation;
 mod output;
 
+// New custom dynamics modules
+mod periodic;
+mod potentials;
+mod rigid_body;
+mod surface_discretization;
+mod forces;
+mod minimization;
+
 use clap::Parser;
 use nalgebra::Vector3;
 use rand::{rngs::StdRng, SeedableRng};
@@ -93,6 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &type_map,
         config.background.density,
         &config.placement,
+        &config.dynamics,
     );
     let placement_time = placement_start.elapsed();
 
