@@ -8,6 +8,14 @@ mod background;
 mod validation;
 mod output;
 
+// New custom dynamics modules
+mod periodic;
+mod potentials;
+mod rigid_body;
+mod surface_discretization;
+mod forces;
+mod minimization;
+
 use clap::Parser;
 use nalgebra::Vector3;
 use rand::{rngs::StdRng, SeedableRng};

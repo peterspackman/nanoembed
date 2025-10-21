@@ -11,6 +11,8 @@ pub struct Config {
     pub analysis: AnalysisConfig,
     #[serde(default)]
     pub placement: PlacementConfig,
+    #[serde(default)]
+    pub dynamics: DynamicsConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -77,6 +79,87 @@ pub enum BackgroundMaterial {
     None,
 }
 
+/// Configuration for energy minimization and dynamics
+#[derive(Debug, Deserialize, Serialize, Default)]
+pub struct DynamicsConfig {
+    /// Enable dynamics-based relaxation
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Maximum number of minimization iterations
+    #[serde(default = "default_max_iterations")]
+    pub max_iterations: usize,
+
+    /// Force tolerance for convergence (kcal/mol/Å)
+    #[serde(default = "default_force_tolerance")]
+    pub force_tolerance: f64,
+
+    /// Energy tolerance for convergence (kcal/mol)
+    #[serde(default = "default_energy_tolerance")]
+    pub energy_tolerance: f64,
+
+    /// Maximum displacement per step (Å)
+    #[serde(default = "default_max_displacement")]
+    pub max_displacement: f64,
+
+    /// Maximum rotation per step (radians)
+    #[serde(default = "default_max_rotation")]
+    pub max_rotation: f64,
+
+    /// Use FIRE algorithm (faster) vs steepest descent
+    #[serde(default = "default_use_fire")]
+    pub use_fire: bool,
+
+    /// Potential type
+    #[serde(default = "default_potential_type")]
+    pub potential: PotentialType,
+
+    /// Surface sphere discretization
+    #[serde(default)]
+    pub surface: SurfaceConfig,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum PotentialType {
+    SoftSphere {
+        epsilon: f64,  // Energy scale (kcal/mol)
+        sigma: f64,    // Length scale (Å)
+    },
+    HardSphere {
+        penalty_strength: f64,  // Spring constant (kcal/mol/Å²)
+    },
+}
+
+impl Default for PotentialType {
+    fn default() -> Self {
+        PotentialType::SoftSphere {
+            epsilon: 1.0,
+            sigma: 3.0,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SurfaceConfig {
+    /// Radius of surface spheres (Å)
+    #[serde(default = "default_sphere_radius")]
+    pub sphere_radius: f64,
+
+    /// Target spacing between surface spheres (Å)
+    #[serde(default = "default_target_spacing")]
+    pub target_spacing: f64,
+}
+
+impl Default for SurfaceConfig {
+    fn default() -> Self {
+        Self {
+            sphere_radius: default_sphere_radius(),
+            target_spacing: default_target_spacing(),
+        }
+    }
+}
+
 impl Config {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
         let content = fs::read_to_string(path)?;
@@ -130,4 +213,44 @@ fn default_min_atom_distance() -> f64 {
 
 fn default_collision_buffer() -> f64 {
     3.0  // Buffer distance added to collision detection shapes
+}
+
+// Dynamics config defaults
+fn default_max_iterations() -> usize {
+    10000
+}
+
+fn default_force_tolerance() -> f64 {
+    0.01  // kcal/mol/Å
+}
+
+fn default_energy_tolerance() -> f64 {
+    1e-6  // kcal/mol
+}
+
+fn default_max_displacement() -> f64 {
+    0.5  // Å
+}
+
+fn default_max_rotation() -> f64 {
+    0.1  // radians (~5.7 degrees)
+}
+
+fn default_use_fire() -> bool {
+    true  // FIRE is generally faster than steepest descent
+}
+
+fn default_potential_type() -> PotentialType {
+    PotentialType::SoftSphere {
+        epsilon: 1.0,
+        sigma: 3.0,
+    }
+}
+
+fn default_sphere_radius() -> f64 {
+    2.0  // Å
+}
+
+fn default_target_spacing() -> f64 {
+    3.0  // Å
 }
