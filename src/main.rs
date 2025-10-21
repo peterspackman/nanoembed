@@ -101,6 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &type_map,
         config.background.density,
         &config.placement,
+        &config.dynamics,
     );
     let placement_time = placement_start.elapsed();
 

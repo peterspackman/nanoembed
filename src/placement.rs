@@ -1,8 +1,15 @@
 use crate::grid::NanoparticleGrid;
 use crate::types::Nanoparticle;
 use crate::quasi_random::QuasiRandom;
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, Vector3, Rotation3};
 use rand::{rngs::StdRng, Rng};
+
+// Dynamics imports
+use crate::rigid_body::RigidBody;
+use crate::surface_discretization;
+use crate::potentials::{Potential, SoftSphereParams, HardSphereParams};
+use crate::minimization::{minimize_energy, MinimizerParams};
+use crate::config::{DynamicsConfig, PotentialType};
 
 pub fn place_nanoparticles_with_counts(
     templates: &[(Nanoparticle, usize)], // (template, count) pairs
@@ -13,6 +20,7 @@ pub fn place_nanoparticles_with_counts(
     type_map: &crate::types::AtomTypeMap,
     target_density: f64,
     placement_config: &crate::config::PlacementConfig,
+    dynamics_config: &DynamicsConfig,
 ) -> (Vec<Nanoparticle>, NanoparticleGrid) {
     // Calculate total count and average radius
     let total_count: usize = templates.iter().map(|(_, count)| count).sum();
@@ -48,7 +56,10 @@ pub fn place_nanoparticles_with_counts(
         placement_config,
     );
 
-    (placed, grid)
+    // Apply dynamics-based relaxation if enabled
+    let relaxed = relax_with_dynamics(placed, box_size, dynamics_config);
+
+    (relaxed, grid)
 }
 
 pub fn place_nanoparticles(
@@ -177,4 +188,160 @@ pub fn place_nanoparticles(
 
     println!("Successfully placed {} nanoparticles", placed_particles.len());
     (placed_particles, grid)
+}
+
+/// Convert a Nanoparticle to a RigidBody for dynamics simulation
+fn nanoparticle_to_rigid_body(np: &Nanoparticle) -> RigidBody {
+    // Extract hull points in body frame (centered at origin)
+    let hull_points: Vec<Point3<f64>> = np.atoms
+        .iter()
+        .map(|atom| atom.position - np.center.coords)
+        .collect();
+
+    // Extract orientation from current nanoparticle state
+    // For now, assume identity rotation (nanoparticle already rotated)
+    let orientation = nalgebra::UnitQuaternion::identity();
+
+    RigidBody::from_hull_points(hull_points, np.center, orientation)
+}
+
+/// Convert a RigidBody back to Nanoparticle (update positions)
+fn rigid_body_to_nanoparticle(rb: &RigidBody, original_np: &Nanoparticle) -> Nanoparticle {
+    let mut updated_np = original_np.clone();
+
+    // Update center position
+    updated_np.center = rb.position;
+
+    // Update atom positions using rigid body transform
+    for (i, atom) in updated_np.atoms.iter_mut().enumerate() {
+        if i < rb.hull_points.len() {
+            // Transform from body frame to world frame
+            let world_pos = rb.position + rb.orientation * rb.hull_points[i].coords;
+            atom.position = world_pos;
+        }
+    }
+
+    updated_np
+}
+
+/// Apply dynamics-based relaxation to placed nanoparticles
+/// This uses energy minimization with PBC to remove overlaps and optimize packing
+pub fn relax_with_dynamics(
+    placed_particles: Vec<Nanoparticle>,
+    box_size: Vector3<f64>,
+    dynamics_config: &DynamicsConfig,
+) -> Vec<Nanoparticle> {
+    if !dynamics_config.enabled {
+        println!("Dynamics relaxation disabled, skipping...");
+        return placed_particles;
+    }
+
+    println!("\n=== Starting Dynamics Relaxation ===");
+    println!("Converting {} nanoparticles to rigid bodies...", placed_particles.len());
+
+    // Convert nanoparticles to rigid bodies
+    let mut rigid_bodies: Vec<RigidBody> = placed_particles
+        .iter()
+        .map(nanoparticle_to_rigid_body)
+        .collect();
+
+    // Discretize surfaces
+    println!("Discretizing surfaces into collision spheres...");
+    let mut total_spheres = 0;
+    for body in &mut rigid_bodies {
+        body.surface_spheres = surface_discretization::discretize_convex_hull(
+            &body.hull_points,
+            dynamics_config.surface.sphere_radius,
+            dynamics_config.surface.target_spacing,
+        );
+        total_spheres += body.surface_spheres.len();
+    }
+
+    let avg_spheres = if !rigid_bodies.is_empty() {
+        total_spheres / rigid_bodies.len()
+    } else {
+        0
+    };
+    println!("  Total surface spheres: {} (avg {:.1} per particle)",
+             total_spheres, avg_spheres);
+
+    // Create potential from config
+    let potential = match &dynamics_config.potential {
+        PotentialType::SoftSphere { epsilon, sigma } => {
+            println!("Using soft sphere (WCA) potential:");
+            println!("  epsilon = {:.3} kcal/mol", epsilon);
+            println!("  sigma = {:.3} Å", sigma);
+            Potential::SoftSphere(SoftSphereParams::new_wca(*epsilon, *sigma))
+        }
+        PotentialType::HardSphere { penalty_strength } => {
+            println!("Using hard sphere potential:");
+            println!("  penalty strength = {:.1} kcal/mol/Å²", penalty_strength);
+            Potential::HardSphere(HardSphereParams::new(*penalty_strength))
+        }
+    };
+
+    // Calculate initial energy
+    let initial_energy = crate::forces::calculate_total_energy(&rigid_bodies, box_size, &potential);
+    println!("Initial total energy: {:.6} kcal/mol", initial_energy);
+
+    // Set up minimizer parameters
+    let minimizer_params = MinimizerParams {
+        max_iterations: dynamics_config.max_iterations,
+        force_tolerance: dynamics_config.force_tolerance,
+        energy_tolerance: dynamics_config.energy_tolerance,
+        max_displacement: dynamics_config.max_displacement,
+        max_rotation: dynamics_config.max_rotation,
+        initial_step_size: 0.01,
+        use_fire: dynamics_config.use_fire,
+        print_interval: 100,  // Print every 100 iterations
+    };
+
+    println!("\nMinimization settings:");
+    println!("  Algorithm: {}", if minimizer_params.use_fire { "FIRE" } else { "Steepest Descent" });
+    println!("  Max iterations: {}", minimizer_params.max_iterations);
+    println!("  Force tolerance: {:.6} kcal/mol/Å", minimizer_params.force_tolerance);
+    println!("  Energy tolerance: {:.6} kcal/mol", minimizer_params.energy_tolerance);
+    println!("  Max displacement: {:.3} Å", minimizer_params.max_displacement);
+    println!("  Max rotation: {:.3} rad", minimizer_params.max_rotation);
+
+    // Run minimization
+    println!("\nRunning energy minimization...\n");
+    let result = minimize_energy(&mut rigid_bodies, box_size, &potential, &minimizer_params);
+
+    // Print results
+    match result {
+        crate::minimization::MinimizationResult::Converged {
+            iterations,
+            final_energy,
+            final_max_force,
+        } => {
+            println!("\n✓ Minimization converged in {} iterations", iterations);
+            println!("  Final energy: {:.6} kcal/mol (ΔE = {:.6})",
+                     final_energy, final_energy - initial_energy);
+            println!("  Final max force: {:.6} kcal/mol/Å", final_max_force);
+        }
+        crate::minimization::MinimizationResult::MaxIterations {
+            iterations,
+            final_energy,
+            final_max_force,
+        } => {
+            println!("\n⚠ Reached maximum iterations ({})", iterations);
+            println!("  Final energy: {:.6} kcal/mol (ΔE = {:.6})",
+                     final_energy, final_energy - initial_energy);
+            println!("  Final max force: {:.6} kcal/mol/Å", final_max_force);
+            println!("  Note: System may not be fully relaxed");
+        }
+    }
+
+    // Convert rigid bodies back to nanoparticles
+    println!("\nConverting rigid bodies back to nanoparticles...");
+    let relaxed_particles: Vec<Nanoparticle> = rigid_bodies
+        .iter()
+        .zip(placed_particles.iter())
+        .map(|(rb, original_np)| rigid_body_to_nanoparticle(rb, original_np))
+        .collect();
+
+    println!("=== Dynamics Relaxation Complete ===\n");
+
+    relaxed_particles
 }
